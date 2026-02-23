@@ -22,10 +22,171 @@ from __future__ import print_function
 
 import argparse
 import numpy as np
+import wandb
+import matplotlib
+matplotlib.use('Agg')  # For headless environments (no display)
+import matplotlib.pyplot as plt
 
 from data_loader import data_loader
 from gain import gain
 from utils import rmse_loss
+
+
+def log_imputation_diagnostics(
+    ori_data_x,
+    miss_data_x,
+    imputed_data_x,
+    data_m,
+    wandb_run,
+    max_hist_features=20,
+    hist_bins=50,
+    corr_max_dim=200,
+):
+  """
+  ori_data_x: (n,d) 완전 데이터 (정답)
+  miss_data_x: (n,d) 결측 포함 데이터 (NaN)
+  imputed_data_x: (n,d) GAIN 출력 (결측 채움)
+  data_m: (n,d) indicator (1=observed, 0=missing)  <-- data_loader.py 규약
+  wandb_run: wandb run
+  """
+
+  if wandb_run is None:
+    return
+
+  n, d = ori_data_x.shape
+  missing_mask = (data_m == 0)
+
+  # (A) 변수별 histogram 비교
+
+  # 전체 변수를 다 올리면 과함. (spam은 57개라 가능하지만 기본은 제한)
+  num_features = min(d, max_hist_features)
+
+  for j in range(num_features):
+    # 결측이 실제로 발생한 위치에서만 비교하는 게 핵심 (missing-only)
+    miss_j = missing_mask[:, j]
+    if miss_j.sum() == 0:
+      # 해당 변수는 결측이 없으면 히스토그램 비교 의미가 약함 -> 스킵(원하면 전체 비교로 바꿀 수 있음)
+      continue
+
+    gt = ori_data_x[miss_j, j]
+    imp = imputed_data_x[miss_j, j]
+
+    fig = plt.figure()
+    plt.hist(gt, bins=hist_bins, alpha=0.5, label="GT (missing positions)")
+    plt.hist(imp, bins=hist_bins, alpha=0.5, label="Imputed (missing positions)")
+    plt.title(f"Feature {j}: distribution @ missing positions")
+    plt.legend()
+
+    wandb_run.log({f"diagnostics/hist_missing_only/feature_{j}": wandb.Image(fig)})
+    plt.close(fig)
+
+
+  # (B) Correlation matrix + difference heatmap
+
+  # 고차원(d가 너무 크면) correlation heatmap은 의미도 약하고 이미지도 너무 큼
+  # spam/letter는 보통 충분히 작지만, 안전장치로 차원 제한
+  d_corr = min(d, corr_max_dim)
+  X_gt = ori_data_x[:, :d_corr]
+  X_imp = imputed_data_x[:, :d_corr]
+
+  # 상관계수 계산 (열 기준)
+  # 주의: 상수열이 있으면 NaN이 뜰 수 있음 -> nan_to_num으로 처리
+  corr_gt = np.corrcoef(X_gt, rowvar=False)
+  corr_imp = np.corrcoef(X_imp, rowvar=False)
+
+  corr_gt = np.nan_to_num(corr_gt, nan=0.0, posinf=0.0, neginf=0.0)
+  corr_imp = np.nan_to_num(corr_imp, nan=0.0, posinf=0.0, neginf=0.0)
+
+  corr_diff = corr_imp - corr_gt
+
+  # GT corr heatmap
+  fig1 = plt.figure()
+  plt.imshow(corr_gt, aspect="auto")
+  plt.title(f"Correlation (GT)  d={d_corr}")
+  plt.colorbar()
+  wandb_run.log({"diagnostics/corr/gt": wandb.Image(fig1)})
+  plt.close(fig1)
+
+  # Imputed corr heatmap
+  fig2 = plt.figure()
+  plt.imshow(corr_imp, aspect="auto")
+  plt.title(f"Correlation (Imputed)  d={d_corr}")
+  plt.colorbar()
+  wandb_run.log({"diagnostics/corr/imputed": wandb.Image(fig2)})
+  plt.close(fig2)
+
+  # Diff heatmap
+  fig3 = plt.figure()
+  plt.imshow(corr_diff, aspect="auto")
+  plt.title(f"Correlation Difference (Imputed - GT)  d={d_corr}")
+  plt.colorbar()
+  wandb_run.log({"diagnostics/corr/diff": wandb.Image(fig3)})
+  plt.close(fig3)
+
+  # 추가로 숫자 요약도 남기면 좋음(대시보드에서 비교 쉬움)
+  wandb_run.log({
+    "diagnostics/corr_diff_abs_mean": float(np.mean(np.abs(corr_diff))),
+    "diagnostics/corr_diff_abs_max": float(np.max(np.abs(corr_diff))),
+  })
+
+
+
+def log_featurewise_rmse(
+    ori_data_x,
+    imputed_data_x,
+    data_m,
+    wandb_run
+):
+  """
+  변수별 RMSE (missing 위치에 대해서만 계산)
+  """
+
+  if wandb_run is None:
+    return
+
+  n, d = ori_data_x.shape
+  missing_mask = (data_m == 0)
+
+  feature_rmses = []
+
+  for j in range(d):
+    miss_j = missing_mask[:, j]
+
+    if miss_j.sum() == 0:
+      feature_rmses.append(np.nan)
+      continue
+
+    gt = ori_data_x[miss_j, j]
+    imp = imputed_data_x[miss_j, j]
+
+    rmse_j = np.sqrt(np.mean((gt - imp) ** 2))
+    feature_rmses.append(float(rmse_j))
+
+  feature_rmses = np.array(feature_rmses)
+
+  # wandb scalar logging
+  wandb_run.log({
+      "diagnostics/feature_rmse_mean": float(np.mean(feature_rmses)),
+      "diagnostics/feature_rmse_max": float(np.max(feature_rmses))
+  })
+
+  # Bar plot 생성
+  fig = plt.figure(figsize=(10, 4))
+  plot_vals = np.nan_to_num(feature_rmses, nan=0.0)
+  plt.bar(np.arange(d), plot_vals)
+  plt.title("Feature-wise RMSE (missing positions only)")
+  plt.xlabel("Feature Index")
+  plt.ylabel("RMSE")
+
+  wandb_run.log({
+  "diagnostics/feature_rmse_mean": float(np.nanmean(feature_rmses)),
+  "diagnostics/feature_rmse_max": float(np.nanmax(feature_rmses))
+  })
+  plt.close(fig)
+
+  return feature_rmses
+
+
 
 
 def main (args):
@@ -50,19 +211,65 @@ def main (args):
   gain_parameters = {'batch_size': args.batch_size,
                      'hint_rate': args.hint_rate,
                      'alpha': args.alpha,
-                     'iterations': args.iterations}
+                     'iterations': args.iterations,
+                     'log_every': 100,
+                     'verbose': False}
+  
+  # WandB INIT (실험 단위 관리)
+  run_name = f"{data_name}_miss{miss_rate:.2f}_bs{args.batch_size}_alpha{args.alpha}"
+
+  wandb_run = wandb.init(
+      project="HK_GAIN",
+      name=run_name,
+      config={
+          "data_name": data_name,
+          "miss_rate": miss_rate,
+          "batch_size": args.batch_size,
+          "hint_rate": args.hint_rate,
+          "alpha": args.alpha,
+          "iterations": args.iterations,
+          "log_every": gain_parameters['log_every'],
+          "verbose": gain_parameters['verbose']
+      }
+  )
   
   # Load data and introduce missingness
   ori_data_x, miss_data_x, data_m = data_loader(data_name, miss_rate)
   
   # Impute missing data
-  imputed_data_x = gain(miss_data_x, gain_parameters)
+  imputed_data_x = gain(miss_data_x, gain_parameters,
+                        wandb_run=wandb_run)  # Pass the wandb run to gain
   
   # Report the RMSE performance
   rmse = rmse_loss (ori_data_x, imputed_data_x, data_m)
   
   print()
   print('RMSE Performance: ' + str(np.round(rmse, 4)))
+
+  # wandb에 최종 metric 기록
+  wandb_run.log({"final/RMSE": float(rmse)})
+
+  # Additional diagnostics
+  log_imputation_diagnostics(
+      ori_data_x=ori_data_x,
+      miss_data_x=miss_data_x,
+      imputed_data_x=imputed_data_x,
+      data_m=data_m,
+      wandb_run=wandb_run,
+      max_hist_features=20,
+      hist_bins=50,
+      corr_max_dim=200
+  )
+
+  # 변수별 RMSE 추가
+  log_featurewise_rmse(
+      ori_data_x,
+      imputed_data_x,
+      data_m,
+      wandb_run
+  )
+
+  wandb.finish()
   
   return imputed_data_x, rmse
 
@@ -72,7 +279,7 @@ if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument(
       '--data_name',
-      choices=['letter','spam'],
+      choices=['letter','spam', 'breastcancer'],
       default='spam',
       type=str)
   parser.add_argument(

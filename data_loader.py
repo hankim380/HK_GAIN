@@ -35,8 +35,8 @@ def data_loader (data_name, miss_rate):
   '''
   
   # Load data
-  if data_name in ['letter', 'spam']:
-    file_name = 'data/'+data_name+'.csv'
+  if data_name in ['letter', 'spam', 'breastcancer']:
+    file_name = '/home/hankim380/2026_imputation/HK_GAIN/data/'+data_name+'.csv'
     data_x = np.loadtxt(file_name, delimiter=",", skiprows=1)
   elif data_name == 'mnist':
     (data_x, _), _ = mnist.load_data()

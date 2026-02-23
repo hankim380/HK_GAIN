@@ -29,12 +29,17 @@ tf.disable_v2_behavior()
 import numpy as np
 from tqdm import tqdm
 
+try:
+  import wandb
+except ImportError:
+  wandb = None
+
 from utils import normalization, renormalization, rounding
 from utils import xavier_init
 from utils import binary_sampler, uniform_sampler, sample_batch_index
 
 
-def gain (data_x, gain_parameters):
+def gain (data_x, gain_parameters, wandb_run=None):
   '''Impute missing values in data_x
   
   Args:
@@ -44,6 +49,11 @@ def gain (data_x, gain_parameters):
       - hint_rate: Hint rate
       - alpha: Hyperparameter
       - iterations: Iterations
+    optional:
+        log_every (int, default 100)
+        verbose (bool, default True)
+        wandb_project (str) / wandb_run_name (str) if you want internal init
+    - wandb_run: (optional) an existing wandb run object (preferred)
       
   Returns:
     - imputed_data: imputed data
@@ -56,6 +66,17 @@ def gain (data_x, gain_parameters):
   hint_rate = gain_parameters['hint_rate']
   alpha = gain_parameters['alpha']
   iterations = gain_parameters['iterations']
+
+  log_every = int(gain_parameters.get('log_every', 100))
+  verbose = bool(gain_parameters.get('verbose', True))
+
+  # Optional: init wandb here if not provided (I recommend doing it in main)
+  if wandb_run is None and wandb is not None and gain_parameters.get('wandb_project', None):
+    wandb_run = wandb.init(
+      project=gain_parameters['wandb_project'],
+      name=gain_parameters.get('wandb_run_name', None),
+      config={k: v for k, v in gain_parameters.items() if isinstance(v, (int, float, str, bool))}
+    )
   
   # Other parameters
   no, dim = data_x.shape
@@ -153,7 +174,8 @@ def gain (data_x, gain_parameters):
   sess.run(tf.global_variables_initializer())
    
   # Start Iterations
-  for it in tqdm(range(iterations)):    
+  pbar = tqdm(range(iterations))
+  for it in pbar:    
       
     # Sample batch
     batch_idx = sample_batch_index(no, batch_size)
@@ -168,11 +190,36 @@ def gain (data_x, gain_parameters):
     # Combine random vectors with observed vectors
     X_mb = M_mb * X_mb + (1-M_mb) * Z_mb 
       
-    _, D_loss_curr = sess.run([D_solver, D_loss_temp], 
+    _, D_loss_curr, D_loss_temp_curr = sess.run([D_solver, D_loss, D_loss_temp], 
                               feed_dict = {M: M_mb, X: X_mb, H: H_mb})
-    _, G_loss_curr, MSE_loss_curr = \
-    sess.run([G_solver, G_loss_temp, MSE_loss],
+    _, G_loss_curr, G_loss_temp_curr, MSE_loss_curr = \
+    sess.run([G_solver, G_loss, G_loss_temp, MSE_loss],
              feed_dict = {X: X_mb, M: M_mb, H: H_mb})
+    
+    # Logging
+    if (it % log_every) == 0 or it == iterations - 1:
+      # tqdm postfix
+      pbar.set_postfix({
+        "D_loss": float(D_loss_curr),
+        "G_loss": float(G_loss_curr),
+        "MSE": float(MSE_loss_curr)
+      })
+
+      if verbose:
+        print(f"[{it:>6}/{iterations}] "
+              f"D_loss={D_loss_curr:.6f} (temp={D_loss_temp_curr:.6f}) | "
+              f"G_loss={G_loss_curr:.6f} (adv={G_loss_temp_curr:.6f}) | "
+              f"MSE={MSE_loss_curr:.6f}")
+
+      if wandb_run is not None:
+        wandb_run.log({
+          "train/D_loss": float(D_loss_curr),
+          "train/D_loss_temp": float(D_loss_temp_curr),
+          "train/G_loss": float(G_loss_curr),
+          "train/G_loss_adv": float(G_loss_temp_curr),
+          "train/MSE_loss": float(MSE_loss_curr),
+          "step": it
+        }, step=it)
             
   ## Return imputed data      
   Z_mb = uniform_sampler(0, 0.01, no, dim) 
