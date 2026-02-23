@@ -20,6 +20,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import os
 import argparse
 import numpy as np
 import wandb
@@ -31,6 +32,8 @@ from data_loader import data_loader
 from gain import gain
 from utils import rmse_loss
 
+from datetime import datetime
+
 
 def log_imputation_diagnostics(
     ori_data_x,
@@ -38,6 +41,7 @@ def log_imputation_diagnostics(
     imputed_data_x,
     data_m,
     wandb_run,
+    run_dir,
     max_hist_features=20,
     hist_bins=50,
     corr_max_dim=200,
@@ -52,6 +56,12 @@ def log_imputation_diagnostics(
 
   if wandb_run is None:
     return
+  
+  # 저장 폴더 생성
+  hist_dir = os.path.join(run_dir, "hist_missing_only")
+  corr_dir = os.path.join(run_dir, "corr")
+  os.makedirs(hist_dir, exist_ok=True)
+  os.makedirs(corr_dir, exist_ok=True)
 
   n, d = ori_data_x.shape
   missing_mask = (data_m == 0)
@@ -77,6 +87,11 @@ def log_imputation_diagnostics(
     plt.title(f"Feature {j}: distribution @ missing positions")
     plt.legend()
 
+    # 로컬 저장
+    fig_path = os.path.join(hist_dir, f"feature_{j}.png")
+    fig.savefig(fig_path, bbox_inches="tight")
+
+    # wandb 업로드
     wandb_run.log({f"diagnostics/hist_missing_only/feature_{j}": wandb.Image(fig)})
     plt.close(fig)
 
@@ -135,7 +150,8 @@ def log_featurewise_rmse(
     ori_data_x,
     imputed_data_x,
     data_m,
-    wandb_run
+    wandb_run,
+    run_dir
 ):
   """
   변수별 RMSE (missing 위치에 대해서만 계산)
@@ -143,6 +159,10 @@ def log_featurewise_rmse(
 
   if wandb_run is None:
     return
+  
+  # 저장 폴더
+  imp_dir = os.path.join(run_dir, "imputed_data")
+  os.makedirs(imp_dir, exist_ok=True)
 
   n, d = ori_data_x.shape
   missing_mask = (data_m == 0)
@@ -169,6 +189,9 @@ def log_featurewise_rmse(
       "diagnostics/feature_rmse_mean": float(np.mean(feature_rmses)),
       "diagnostics/feature_rmse_max": float(np.max(feature_rmses))
   })
+
+  # 로컬에 값 저장
+  np.save(os.path.join(imp_dir, "feature_rmse.npy"), feature_rmses)
 
   # Bar plot 생성
   fig = plt.figure(figsize=(10, 4))
@@ -204,6 +227,20 @@ def main (args):
     - imputed_data_x: imputed data
     - rmse: Root Mean Squared Error
   '''
+
+  timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+  run_dir = os.path.join("experiments", f"{run_name}_{timestamp}")
+  os.makedirs(run_dir, exist_ok=True)
+
+  # 하위 폴더 생성
+  imp_dir = os.path.join(run_dir, "imputed_data")
+  corr_dir = os.path.join(run_dir, "corr")
+  hist_dir = os.path.join(run_dir, "hist_missing_only")
+  os.makedirs(imp_dir, exist_ok=True)
+  os.makedirs(corr_dir, exist_ok=True)
+  os.makedirs(hist_dir, exist_ok=True)
+
+  print("Experiment directory:", run_dir)
   
   data_name = args.data_name
   miss_rate = args.miss_rate
@@ -216,7 +253,7 @@ def main (args):
                      'verbose': False}
   
   # WandB INIT (실험 단위 관리)
-  run_name = f"{data_name}_miss{miss_rate:.2f}_bs{args.batch_size}_alpha{args.alpha}"
+  run_name = f"{data_name}_mcar{miss_rate:.2f}_bs{args.batch_size}_alpha{args.alpha}"
 
   wandb_run = wandb.init(
       project="HK_GAIN",
@@ -246,6 +283,10 @@ def main (args):
   print()
   print('RMSE Performance: ' + str(np.round(rmse, 4)))
 
+  np.save(os.path.join(imp_dir, "imputed.npy"), imputed_data_x)
+  np.save(os.path.join(imp_dir, "original.npy"), ori_data_x)
+  np.save(os.path.join(imp_dir, "mask.npy"), data_m)
+
   # wandb에 최종 metric 기록
   wandb_run.log({"final/RMSE": float(rmse)})
 
@@ -256,6 +297,7 @@ def main (args):
       imputed_data_x=imputed_data_x,
       data_m=data_m,
       wandb_run=wandb_run,
+      run_dir=run_dir,
       max_hist_features=20,
       hist_bins=50,
       corr_max_dim=200
@@ -266,7 +308,8 @@ def main (args):
       ori_data_x,
       imputed_data_x,
       data_m,
-      wandb_run
+      wandb_run,
+      run_dir=run_dir
   )
 
   wandb.finish()
