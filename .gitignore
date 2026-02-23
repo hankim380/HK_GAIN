@@ -1,5 +1,5 @@
 # Ignore data files
-data/
+_data/
 
 # Python cache
 __pycache__/
@@ -12,12 +12,13 @@ __pycache__/
 Thumbs.db
 
 # Wandb Logs
-wandb/
+_wandb/
 
 # Experiment outputs
-results/
-outputs/
-logs/
+_results/
+_outputs/
+_logs/
+_experiments/
 
 # Model checkpoints
 *.ckpt
