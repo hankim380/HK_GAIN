@@ -17,6 +17,7 @@
 
 # Necessary packages
 import numpy as np
+import pandas as pd
 from utils import binary_sampler
 from keras.datasets import mnist
 
@@ -33,10 +34,26 @@ def data_loader (data_name, miss_rate):
     miss_data_x: data with missing values
     data_m: indicator matrix for missing components
   '''
+
+  if data_name == "breastcancer":
+        file_name = "/home/hankim380/2026_imputation/HK_GAIN/_data/breastcancer.csv"
+        df = pd.read_csv(file_name)
+
+        ids = df["ID"].to_numpy()
+        y = df["Diagnosis"].map({"M": 1, "B": 0}).to_numpy()
+
+        X = df.drop(columns=["ID", "Diagnosis"]).to_numpy(dtype=float)
+
+        no, dim = X.shape
+        data_m = binary_sampler(1 - miss_rate, no, dim)
+        miss_X = X.copy()
+        miss_X[data_m == 0] = np.nan
+
+        return X, miss_X, data_m, y, ids
   
   # Load data
   if data_name in ['letter', 'spam', 'breastcancer']:
-    file_name = '/home/hankim380/2026_imputation/HK_GAIN/data/'+data_name+'.csv'
+    file_name = '/home/hankim380/2026_imputation/HK_GAIN/_data/'+data_name+'.csv'
     data_x = np.loadtxt(file_name, delimiter=",", skiprows=1)
   elif data_name == 'mnist':
     (data_x, _), _ = mnist.load_data()

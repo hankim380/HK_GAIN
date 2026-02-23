@@ -228,20 +228,6 @@ def main (args):
     - rmse: Root Mean Squared Error
   '''
 
-  timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-  run_dir = os.path.join("experiments", f"{run_name}_{timestamp}")
-  os.makedirs(run_dir, exist_ok=True)
-
-  # 하위 폴더 생성
-  imp_dir = os.path.join(run_dir, "imputed_data")
-  corr_dir = os.path.join(run_dir, "corr")
-  hist_dir = os.path.join(run_dir, "hist_missing_only")
-  os.makedirs(imp_dir, exist_ok=True)
-  os.makedirs(corr_dir, exist_ok=True)
-  os.makedirs(hist_dir, exist_ok=True)
-
-  print("Experiment directory:", run_dir)
-  
   data_name = args.data_name
   miss_rate = args.miss_rate
   
@@ -269,9 +255,23 @@ def main (args):
           "verbose": gain_parameters['verbose']
       }
   )
+
+  timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+  run_dir = os.path.join("_outputs", f"{run_name}_{timestamp}")
+  os.makedirs(run_dir, exist_ok=True)
+
+  # 하위 폴더 생성
+  imp_dir = os.path.join(run_dir, "imputed_data")
+  corr_dir = os.path.join(run_dir, "corr")
+  hist_dir = os.path.join(run_dir, "hist_missing_only")
+  os.makedirs(imp_dir, exist_ok=True)
+  os.makedirs(corr_dir, exist_ok=True)
+  os.makedirs(hist_dir, exist_ok=True)
+
+  print("Experiment directory:", run_dir)
   
   # Load data and introduce missingness
-  ori_data_x, miss_data_x, data_m = data_loader(data_name, miss_rate)
+  ori_data_x, miss_data_x, data_m, y, ids = data_loader(data_name, miss_rate)
   
   # Impute missing data
   imputed_data_x = gain(miss_data_x, gain_parameters,
@@ -286,6 +286,8 @@ def main (args):
   np.save(os.path.join(imp_dir, "imputed.npy"), imputed_data_x)
   np.save(os.path.join(imp_dir, "original.npy"), ori_data_x)
   np.save(os.path.join(imp_dir, "mask.npy"), data_m)
+  np.save(os.path.join(imp_dir, "labels.npy"), y)
+  np.save(os.path.join(imp_dir, "ids.npy"), ids)
 
   # wandb에 최종 metric 기록
   wandb_run.log({"final/RMSE": float(rmse)})

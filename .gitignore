@@ -12,13 +12,12 @@ __pycache__/
 Thumbs.db
 
 # Wandb Logs
-_wandb/
+wandb/
 
 # Experiment outputs
 _results/
 _outputs/
 _logs/
-_experiments/
 
 # Model checkpoints
 *.ckpt
@@ -30,3 +29,6 @@ _experiments/
 *.jpg
 *.jpeg
 *.pdf
+
+# ignore ipynb files
+*.ipynb
